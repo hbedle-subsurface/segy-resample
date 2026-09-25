@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEG-Y Resample</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --red: #841617; --slate: #5C6670; --ink: #16191C; --fill: #F4F6F7; --grid: #C9CDD2;
+  --ok: #2F6B3A; --warn: #8A5A00;
+  --font: "Source Sans 3", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: var(--font); color: var(--ink); background: #fff;
+       font-size: 17px; line-height: 1.45; font-variant-numeric: tabular-nums; }
+header { border-bottom: 1px solid var(--grid); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+header .wrap { padding-top: 28px; padding-bottom: 20px; }
+h1 { margin: 0; font-size: 2.1rem; font-weight: 700; letter-spacing: -0.01em; }
+.sub { margin: 4px 0 0; color: var(--slate); max-width: 70ch; }
+main .wrap { padding-top: 8px; padding-bottom: 48px; }
+section.step { display: grid; grid-template-columns: 44px 1fr; gap: 0 14px; padding: 22px 0;
+               border-bottom: 1px solid var(--grid); }
+section.step > div { min-width: 0; }
+.num { font-size: 1.6rem; font-weight: 700; color: var(--red); line-height: 1.1; }
+h2 { margin: 0 0 10px; font-size: 1.2rem; font-weight: 700; }
+p { margin: 0 0 10px; }
+.muted { color: var(--slate); }
+.drop { display: block; border: 1.5px dashed var(--grid); border-radius: 6px; padding: 18px; background: var(--fill);
+        text-align: center; cursor: pointer; }
+.drop.over { border-color: var(--red); background: #fff; }
+.drop input { display: none; }
+button, .btn { font: inherit; font-weight: 600; border: 1px solid var(--red); background: var(--red); color: #fff;
+         padding: 8px 18px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+button.ghost { background: #fff; color: var(--red); padding: 2px 10px; font-weight: 400; font-size: 0.9rem; }
+button:disabled { background: var(--grid); border-color: var(--grid); color: #fff; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, .btn:focus-visible, .drop:focus-visible {
+  outline: 3px solid #2B6CB0; outline-offset: 2px; }
+.tablewrap { overflow-x: auto; margin-top: 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { font-weight: 600; color: var(--slate); }
+tbody tr:nth-child(even) td { background: var(--fill); }
+td.name { white-space: normal; min-width: 180px; max-width: 280px; overflow-wrap: anywhere; }
+td.ds { white-space: normal; min-width: 220px; color: var(--slate); font-size: 0.88rem; }
+.settings { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: flex-end; }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 0.92rem; color: var(--slate); }
+label.f input, label.f select { font: inherit; color: var(--ink); padding: 5px 8px; border: 1px solid var(--grid);
+  border-radius: 4px; width: 9em; background: #fff; }
+.status { margin-top: 12px; padding: 8px 12px; border-left: 4px solid var(--grid); background: var(--fill); }
+.status.ok { border-color: var(--ok); }
+.status.warn { border-color: var(--warn); }
+.status ul { margin: 4px 0 0; padding-left: 20px; }
+.prog { margin-top: 10px; }
+.bar { height: 8px; background: var(--fill); border: 1px solid var(--grid); border-radius: 4px; overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--red); }
+.progrow { display: grid; grid-template-columns: minmax(120px, 280px) 1fr 110px; gap: 12px; align-items: center;
+           font-size: 0.92rem; margin: 6px 0; }
+.progrow span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qc { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 22px; margin-top: 14px; }
+.qcpanel h3 { margin: 0 0 4px; font-size: 1rem; font-weight: 600; word-break: break-all; }
+.qcpanel canvas { width: 100%; display: block; }
+.sliders { display: flex; flex-wrap: wrap; gap: 10px 30px; margin-top: 8px; }
+.sliders label { display: flex; align-items: center; gap: 10px; font-size: 0.92rem; color: var(--slate); }
+.sliders input[type=range] { width: 260px; accent-color: var(--red); }
+.sliders output { min-width: 7em; color: var(--ink); }
+.dl { margin-top: 6px; }
+.note { font-size: 0.92rem; color: var(--slate); max-width: 80ch; }
+footer { border-top: 1px solid var(--grid); color: var(--slate); font-size: 0.88rem; }
+footer .wrap { padding-top: 14px; padding-bottom: 24px; }
+footer a { color: var(--slate); }
+.hidden { display: none !important; }
+@media (max-width: 640px) {
+  section.step { grid-template-columns: 1fr; }
+  .num { margin-bottom: 4px; }
+  .qc { grid-template-columns: 1fr; }
+  .sliders input[type=range] { width: 180px; }
+}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>SEG-Y Resample</h1>
+  <p class="sub">Interpolates post-stack SEG-Y files to a finer sample interval and crops them in time.
+  Files are read and processed in this browser and are not uploaded anywhere.</p>
+</div></header>
+
+<main><div class="wrap">
+
+<section class="step">
+  <div class="num">1</div>
+  <div>
+    <h2>Load SEG-Y files</h2>
+    <label class="drop" id="drop" tabindex="0">
+      <input type="file" id="fileinput" multiple accept=".sgy,.segy,.SGY,.SEGY,*/*">
+      Drop one or more .sgy files here, or click to choose them. Files with the same geometry
+      (for example near and far angle stacks of one line) are resampled with identical settings.
+    </label>
+    <div class="tablewrap hidden" id="intablewrap">
+      <table>
+        <thead><tr><th>File</th><th>Dataset (textual header)</th><th>Traces</th><th>First CDP</th>
+          <th>Samples</th><th>Interval</th><th>Length</th><th>Format</th><th>Size</th><th></th></tr></thead>
+        <tbody id="intable"></tbody>
+      </table>
+    </div>
+    <div id="instatus"></div>
+  </div>
+</section>
+
+<section class="step">
+  <div class="num">2</div>
+  <div>
+    <h2>Choose the output sampling and time window</h2>
+    <div class="settings">
+      <label class="f">Output sample interval
+        <select id="dtout"></select></label>
+      <label class="f">Start time (s)
+        <input type="number" id="tmin" value="0" min="0" step="0.1"></label>
+      <label class="f">End time (s)
+        <input type="number" id="tmax" value="2" min="0" step="0.1"></label>
+    </div>
+    <p class="note" id="outsummary" style="margin-top:12px"></p>
+  </div>
+</section>
+
+<section class="step">
+  <div class="num">3</div>
+  <div>
+    <h2>Resample</h2>
+    <button id="run" disabled>Resample all files</button>
+    <div class="prog" id="prog"></div>
+    <div id="outstatus"></div>
+  </div>
+</section>
+
+<section class="step hidden" id="qcstep">
+  <div class="num">4</div>
+  <div>
+    <h2>Check and download</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Output file</th><th>Traces</th><th>First CDP</th><th>Last CDP</th><th>Samples</th>
+          <th>Interval</th><th>Time range</th><th>RMS</th><th>Size</th><th></th></tr></thead>
+        <tbody id="outtable"></tbody>
+      </table>
+    </div>
+    <p class="note" style="margin-top:14px">Each section is drawn with its own fixed gray scale, clipped at
+    the 99th percentile of absolute amplitude. The red line marks the trace shown below each section and the
+    red bracket marks the time window of that trace plot. In the trace plots, dots are the input samples and
+    the line is the resampled trace.</p>
+    <div class="sliders">
+      <label>Trace <input type="range" id="trslider" min="0" max="0" value="0"><output id="trout"></output></label>
+      <label>Window start <input type="range" id="winslider" min="0" max="0" value="0" step="0.01"><output id="winout"></output></label>
+    </div>
+    <div class="qc" id="qc"></div>
+  </div>
+</section>
+
+<section class="step" style="border-bottom:none">
+  <div class="num"></div>
+  <div class="note">
+    <h2 style="color:var(--ink)">Method</h2>
+    <p>Each trace is Fourier transformed, the spectrum is extended with zeros above the Nyquist frequency of the
+    input sampling, and the inverse transform returns the trace at the finer sample interval. This is
+    band-limited (sinc) interpolation. The input samples reappear unchanged in the output, and no frequencies
+    above the input Nyquist frequency are created. Only the part of each trace needed for the chosen window,
+    plus a 0.5 s tapered margin, is transformed.</p>
+    <p>The output is written as 32-bit IEEE float (format code 5) with the byte order of the input. The binary
+    header sample interval, samples per trace and format code are updated. Each trace header is copied with its
+    samples per trace and sample interval updated, and with the delay recording time increased by the start time
+    when the start time is not zero. All other trace header values, including CDP numbers and coordinates, are
+    unchanged. The 3200-byte textual header is copied as it was, so any sample interval or format it states
+    refers to the original file.</p>
+  </div>
+</section>
+
+</div></main>
+
+<footer><div class="wrap">
+  Heather Bedle, University of Oklahoma. Licensed
+  <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.
+</div></footer>
+
+<script id="core">
+// ---- SEG-Y core: header parsing, sample decoding, band-limited interpolation ----
+// Shared by the page (header summary, trace QC) and the worker (resampling).
+
+var EBCDIC = (function () {
+  // cp037 -> ASCII for printable characters; everything else becomes a space
+  var t = new Array(256).fill(" ");
+  var map = {
+    0x40: " ", 0x4B: ".", 0x4C: "<", 0x4D: "(", 0x4E: "+", 0x4F: "|", 0x50: "&",
+    0x5A: "!", 0x5B: "$", 0x5C: "*", 0x5D: ")", 0x5E: ";", 0x60: "-", 0x61: "/",
+    0x6B: ",", 0x6C: "%", 0x6D: "_", 0x6E: ">", 0x6F: "?", 0x7A: ":", 0x7B: "#",
+    0x7C: "@", 0x7D: "'", 0x7E: "=", 0x7F: '"'
+  };
+  for (var k in map) t[+k] = map[k];
+  var up = "ABCDEFGHI", up2 = "JKLMNOPQR", up3 = "STUVWXYZ";
+  for (var i = 0; i < 9; i++) { t[0xC1 + i] = up[i]; t[0x81 + i] = up[i].toLowerCase(); }
+  for (i = 0; i < 9; i++) { t[0xD1 + i] = up2[i]; t[0x91 + i] = up2[i].toLowerCase(); }
+  for (i = 0; i < 8; i++) { t[0xE2 + i] = up3[i]; t[0xA2 + i] = up3[i].toLowerCase(); }
+  for (i = 0; i < 10; i++) t[0xF0 + i] = String(i);
+  return t;
+})();
+
+function decodeTextual(bytes) {
+  // ASCII space is 0x20, EBCDIC space is 0x40; a textual header is mostly spaces
+  var n20 = 0, n40 = 0, i;
+  for (i = 0; i < bytes.length; i++) { if (bytes[i] === 0x20) n20++; else if (bytes[i] === 0x40) n40++; }
+  var isAscii = n20 >= n40;
+  var s = "";
+  for (i = 0; i < bytes.length; i++) {
+    s += isAscii ? (bytes[i] >= 32 && bytes[i] < 127 ? String.fromCharCode(bytes[i]) : " ") : EBCDIC[bytes[i]];
+  }
+  var lines = [];
+  for (i = 0; i < 40; i++) lines.push(s.substr(i * 80, 80).replace(/\s+$/, ""));
+  return { lines: lines, encoding: isAscii ? "ASCII" : "EBCDIC" };
+}
+
+var FORMAT_NAMES = { 1: "IBM float", 2: "32-bit integer", 3: "16-bit integer", 5: "IEEE float", 8: "8-bit integer" };
+var FORMAT_BYTES = { 1: 4, 2: 4, 3: 2, 5: 4, 8: 1 };
+
+// head: ArrayBuffer holding at least the first 3600 bytes (+ ext headers + one trace header)
+function parseSegyHead(head, fileSize) {
+  var dv = new DataView(head);
+  var le = false;
+  var fmt = dv.getUint16(3224, false);
+  if (!(fmt >= 1 && fmt <= 16)) {
+    var fl = dv.getUint16(3224, true);
+    if (fl >= 1 && fl <= 16) { le = true; fmt = fl; }
+  }
+  if (!FORMAT_BYTES[fmt]) throw new Error("Sample format code " + fmt + " is not supported (supported: 1 IBM float, 5 IEEE float, 2/3/8 integer).");
+  var dtUs = dv.getUint16(3216, le);
+  var ns = dv.getUint16(3220, le);
+  var next = dv.getInt16(3504, le);
+  if (next < 0) throw new Error("Variable-length extended textual headers are not supported.");
+  var hdrLen = 3600 + 3200 * next;
+  if (head.byteLength >= hdrLen + 240) {
+    var nsTr = dv.getUint16(hdrLen + 114, le), dtTr = dv.getUint16(hdrLen + 116, le);
+    if (!ns) ns = nsTr;
+    if (!dtUs) dtUs = dtTr;
+  }
+  if (!ns || !dtUs) throw new Error("Samples per trace or sample interval is zero in both the binary and first trace header.");
+  var bps = FORMAT_BYTES[fmt];
+  var trLen = 240 + ns * bps;
+  var ntr = (fileSize - hdrLen) / trLen;
+  if (ntr !== Math.floor(ntr)) throw new Error("File size does not divide into whole traces of " + ns + " samples. Trace length may vary between traces.");
+  var cdpFirst = head.byteLength >= hdrLen + 24 ? dv.getInt32(hdrLen + 20, le) : null;
+  var text = decodeTextual(new Uint8Array(head, 0, 3200));
+  return { le: le, fmt: fmt, bps: bps, dtUs: dtUs, dt: dtUs / 1e6, ns: ns, ntr: ntr,
+           hdrLen: hdrLen, trLen: trLen, next: next, cdpFirst: cdpFirst, text: text };
+}
+
+// decode ns samples starting at byte offset off of DataView dv into Float64Array out
+function decodeSamples(dv, off, ns, fmt, le, out) {
+  var i;
+  if (fmt === 1) {
+    for (i = 0; i < ns; i++) {
+      var u = dv.getUint32(off + 4 * i, le);
+      if (u === 0) { out[i] = 0; continue; }
+      var sign = (u >>> 31) ? -1 : 1;
+      var ex = ((u >>> 24) & 0x7F) - 64;
+      var mant = (u & 0x00FFFFFF) / 16777216;
+      out[i] = sign * mant * Math.pow(16, ex);
+    }
+  } else if (fmt === 5) {
+    for (i = 0; i < ns; i++) out[i] = dv.getFloat32(off + 4 * i, le);
+  } else if (fmt === 2) {
+    for (i = 0; i < ns; i++) out[i] = dv.getInt32(off + 4 * i, le);
+  } else if (fmt === 3) {
+    for (i = 0; i < ns; i++) out[i] = dv.getInt16(off + 2 * i, le);
+  } else if (fmt === 8) {
+    for (i = 0; i < ns; i++) out[i] = dv.getInt8(off + i);
+  }
+}
+
+// ---- radix-2 complex FFT (in place), plans cached by length ----
+var FFT_PLANS = {};
+function fftPlan(n) {
+  if (FFT_PLANS[n]) return FFT_PLANS[n];
+  var bits = Math.round(Math.log2(n));
+  var rev = new Uint32Array(n);
+  for (var i = 0; i < n; i++) {
+    var r = 0, x = i;
+    for (var b = 0; b < bits; b++) { r = (r << 1) | (x & 1); x >>= 1; }
+    rev[i] = r;
+  }
+  var cos = new Float64Array(n / 2), sin = new Float64Array(n / 2);
+  for (i = 0; i < n / 2; i++) { cos[i] = Math.cos(2 * Math.PI * i / n); sin[i] = Math.sin(2 * Math.PI * i / n); }
+  return (FFT_PLANS[n] = { rev: rev, cos: cos, sin: sin });
+}
+function fft(re, im, n, inverse) {
+  var p = fftPlan(n), rev = p.rev, i, j, t;
+  for (i = 0; i < n; i++) {
+    j = rev[i];
+    if (j > i) { t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  var sgn = inverse ? 1 : -1;
+  for (var size = 2; size <= n; size <<= 1) {
+    var half = size >> 1, step = n / size;
+    for (var start = 0; start < n; start += size) {
+      for (var k = 0; k < half; k++) {
+        var wr = p.cos[k * step], wi = sgn * p.sin[k * step];
+        var a = start + k, b = a + half;
+        var xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi;
+        re[a] += xr; im[a] += xi;
+      }
+    }
+  }
+}
+
+// Plan for interpolating traces of length nsIn by integer factor L, keeping output samples [i0, i1].
+// Only the input samples needed for [i0, i1] plus a 0.5 s margin are transformed; the margin is
+// tapered so the truncation does not reach the kept window.
+function makeResamplePlan(nsIn, dtIn, L, i0, i1) {
+  var margin = Math.round(0.5 / dtIn);
+  var nUse = Math.min(nsIn, Math.ceil(i1 / L) + 1 + margin);
+  var taperLen = nUse < nsIn ? Math.round(0.25 / dtIn) : 0;
+  var taper = new Float64Array(nUse).fill(1);
+  for (var i = 0; i < taperLen; i++) {
+    taper[nUse - taperLen + i] = 0.5 * (1 + Math.cos(Math.PI * (i + 1) / taperLen));
+  }
+  var N = 1;
+  while (N < nUse + 256) N <<= 1;
+  var M = N * L;
+  return { nsIn: nsIn, L: L, i0: i0, i1: i1, nOut: i1 - i0 + 1, nUse: nUse, taper: taper, N: N, M: M,
+           re: new Float64Array(N), im: new Float64Array(N),
+           RE: new Float64Array(M), IM: new Float64Array(M) };
+}
+
+// Interpolate two real traces at once (a in the real part, b in the imaginary part).
+// b may be null. Writes outA/outB (length nOut).
+function resamplePair(plan, a, b, outA, outB) {
+  var N = plan.N, M = plan.M, re = plan.re, im = plan.im, RE = plan.RE, IM = plan.IM, i;
+  var nUse = plan.nUse, tp = plan.taper;
+  for (i = 0; i < nUse; i++) { re[i] = a[i] * tp[i]; im[i] = b ? b[i] * tp[i] : 0; }
+  for (i = nUse; i < N; i++) { re[i] = 0; im[i] = 0; }
+  fft(re, im, N, false);
+  RE.fill(0); IM.fill(0);
+  var h = N / 2;
+  for (i = 0; i < h; i++) { RE[i] = re[i]; IM[i] = im[i]; }
+  for (i = h + 1; i < N; i++) { RE[i + M - N] = re[i]; IM[i + M - N] = im[i]; }
+  if (plan.L > 1) {
+    RE[h] = 0.5 * re[h]; IM[h] = 0.5 * im[h];
+    RE[M - h] = 0.5 * re[h]; IM[M - h] = 0.5 * im[h];
+  } else { RE[h] = re[h]; IM[h] = im[h]; }
+  fft(RE, IM, M, true);
+  var s = 1 / N;
+  for (i = 0; i < plan.nOut; i++) {
+    outA[i] = RE[plan.i0 + i] * s;
+    if (outB) outB[i] = IM[plan.i0 + i] * s;
+  }
+}
+
+</script>
+<script id="worker-src" type="text/plain">
+// ---- worker: resample one SEG-Y file ----
+// message in : { file, dtOutUs, tmin, tmax }
+// messages out: {type:'progress', done, total} | {type:'chunk', buf} | {type:'done', ...} | {type:'error', message}
+
+async function resampleFile(file, dtOutUs, tmin, tmax, post) {
+  var headBuf = await file.slice(0, Math.min(file.size, 3600 + 3200 * 100 + 240)).arrayBuffer();
+  var H = parseSegyHead(headBuf, file.size);
+  var le = H.le;
+
+  var ratio = H.dtUs / dtOutUs;
+  var L = Math.round(ratio);
+  if (Math.abs(ratio - L) > 1e-9 || L < 1) throw new Error("Output sample interval must divide the input sample interval (" + H.dtUs / 1000 + " ms).");
+  var dtOut = dtOutUs / 1e6;
+  var nsFull = (H.ns - 1) * L + 1;
+  var i0 = Math.max(0, Math.round(tmin / dtOut));
+  var i1 = tmax > 0 ? Math.min(nsFull - 1, Math.round(tmax / dtOut)) : nsFull - 1;
+  if (i1 <= i0) throw new Error("End time must be later than start time and within the trace.");
+  var plan = makeResamplePlan(H.ns, H.dt, L, i0, i1);
+  var nOut = plan.nOut;
+
+  // headers (textual + binary + extended) with updated binary fields
+  var hdr = new Uint8Array(headBuf.slice(0, H.hdrLen));
+  var hv = new DataView(hdr.buffer);
+  hv.setUint16(3216, dtOutUs, le); hv.setUint16(3218, dtOutUs, le);
+  hv.setUint16(3220, nOut, le);    hv.setUint16(3222, nOut, le);
+  hv.setUint16(3224, 5, le);
+  post({ type: "chunk", buf: hdr.buffer }, [hdr.buffer]);
+
+  var outTrLen = 240 + 4 * nOut;
+  var perChunk = Math.max(2, Math.floor(8e6 / H.trLen)) & ~1;   // even, ~8 MB per read
+  var a = new Float64Array(H.ns), b = new Float64Array(H.ns);
+  var oa = new Float64Array(nOut), ob = new Float64Array(nOut);
+
+  // QC thumbnail: about 900 traces by 600 samples
+  var tStride = Math.max(1, Math.ceil(H.ntr / 900));
+  var sStride = Math.max(1, Math.ceil(nOut / 600));
+  var tCols = Math.ceil(H.ntr / tStride), tRows = Math.ceil(nOut / sStride);
+  var thumb = new Float32Array(tCols * tRows);
+
+  var sum2 = 0, cnt = 0, amin = Infinity, amax = -Infinity;
+  var cdpLast = null, delrtAdd = Math.round(i0 * dtOut * 1000);
+
+  for (var c0 = 0; c0 < H.ntr; c0 += perChunk) {
+    var n = Math.min(perChunk, H.ntr - c0);
+    var inBuf = await file.slice(H.hdrLen + c0 * H.trLen, H.hdrLen + (c0 + n) * H.trLen).arrayBuffer();
+    var dv = new DataView(inBuf);
+    var outBuf = new ArrayBuffer(n * outTrLen);
+    var odv = new DataView(outBuf), ob8 = new Uint8Array(outBuf), ib8 = new Uint8Array(inBuf);
+
+    for (var k = 0; k < n; k += 2) {
+      var two = k + 1 < n;
+      decodeSamples(dv, k * H.trLen + 240, H.ns, H.fmt, le, a);
+      if (two) decodeSamples(dv, (k + 1) * H.trLen + 240, H.ns, H.fmt, le, b);
+      resamplePair(plan, a, two ? b : null, oa, two ? ob : null);
+      for (var q = 0; q < (two ? 2 : 1); q++) {
+        var src = q ? ob : oa, kk = k + q, trace = c0 + kk;
+        var ioff = kk * H.trLen, ooff = kk * outTrLen;
+        ob8.set(ib8.subarray(ioff, ioff + 240), ooff);
+        odv.setUint16(ooff + 114, nOut, le);
+        odv.setUint16(ooff + 116, dtOutUs, le);
+        if (delrtAdd) odv.setInt16(ooff + 108, odv.getInt16(ooff + 108, le) + delrtAdd, le);
+        for (var s = 0; s < nOut; s++) {
+          var v = src[s];
+          odv.setFloat32(ooff + 240 + 4 * s, v, le);
+          sum2 += v * v;
+          if (v < amin) amin = v;
+          if (v > amax) amax = v;
+        }
+        cnt += nOut;
+        if (trace % tStride === 0) {
+          var col = trace / tStride;
+          for (var r = 0; r < tRows; r++) thumb[r * tCols + col] = src[r * sStride];
+        }
+        if (trace === H.ntr - 1) cdpLast = odv.getInt32(ooff + 20, le);
+      }
+    }
+    post({ type: "chunk", buf: outBuf }, [outBuf]);
+    post({ type: "progress", done: c0 + n, total: H.ntr });
+  }
+
+  post({ type: "done", ntr: H.ntr, nOut: nOut, dtOutUs: dtOutUs, t0: i0 * dtOut,
+         outTrLen: outTrLen, hdrLen: H.hdrLen, le: le,
+         rms: Math.sqrt(sum2 / cnt), min: amin, max: amax, cdpLast: cdpLast,
+         thumb: thumb, tCols: tCols, tRows: tRows, tStride: tStride, sStride: sStride },
+       [thumb.buffer]);
+}
+
+if (typeof self !== "undefined" && typeof self.postMessage === "function" && typeof window === "undefined") {
+  self.onmessage = function (e) {
+    var d = e.data;
+    resampleFile(d.file, d.dtOutUs, d.tmin, d.tmax, function (m, t) { self.postMessage(m, t || []); })
+      .catch(function (err) { self.postMessage({ type: "error", message: err.message }); });
+  };
+}
+
+</script>
+<script>
+(function () {
+  var files = [];              // {file, H, err, result}
+  var workerURL = URL.createObjectURL(new Blob(
+    [document.getElementById("core").textContent, "\n", document.getElementById("worker-src").textContent],
+    { type: "text/javascript" }));
+
+  var $ = function (id) { return document.getElementById(id); };
+  function fmtBytes(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + " GB" : (b / 1e6).toFixed(1) + " MB"; }
+  function fmtMs(us) { return (us / 1000).toString() + " ms"; }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function datasetLine(H) {
+    var l = H.text.lines.find(function (x) { return /DATASET/i.test(x); }) ||
+            H.text.lines.find(function (x) { return x.replace(/^C\s?\d+\s*/, "").trim(); }) || "";
+    return l.replace(/^C\s?\d+\s*/, "").trim();
+  }
+
+  // ---------- loading ----------
+  var drop = $("drop"), fin = $("fileinput");
+  drop.addEventListener("dragover", function (e) { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", function () { drop.classList.remove("over"); });
+  drop.addEventListener("drop", function (e) { e.preventDefault(); drop.classList.remove("over"); addFiles(Array.prototype.slice.call(e.dataTransfer.files)); });
+  drop.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fin.click(); } });
+  fin.addEventListener("change", function () { var l = Array.prototype.slice.call(fin.files); fin.value = ""; addFiles(l); });
+
+  async function addFiles(list) {
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i], entry = { file: f };
+      try {
+        var head = await f.slice(0, Math.min(f.size, 3600 + 3200 * 100 + 240)).arrayBuffer();
+        if (f.size < 3600 + 240) throw new Error("File is smaller than a SEG-Y header.");
+        entry.H = parseSegyHead(head, f.size);
+      } catch (err) { entry.err = err.message; }
+      files.push(entry);
+    }
+    clearResults();
+    renderInputs();
+  }
+
+  function renderInputs() {
+    $("intablewrap").classList.toggle("hidden", files.length === 0);
+    $("intable").innerHTML = files.map(function (e, i) {
+      var H = e.H;
+      if (!H) return "<tr><td class='name'>" + esc(e.file.name) + "</td><td colspan='8' style='color:var(--red)'>" +
+        esc(e.err) + "</td><td><button class='ghost' data-rm='" + i + "'>Remove</button></td></tr>";
+      return "<tr><td class='name'>" + esc(e.file.name) + "</td><td class='ds'>" + esc(datasetLine(H)) + "</td><td>" +
+        H.ntr.toLocaleString() + "</td><td>" + H.cdpFirst + "</td><td>" + H.ns + "</td><td>" + fmtMs(H.dtUs) +
+        "</td><td>" + ((H.ns - 1) * H.dt).toFixed(3) + " s</td><td>" + FORMAT_NAMES[H.fmt] + (H.le ? ", little-endian" : "") +
+        "</td><td>" + fmtBytes(e.file.size) + "</td><td><button class='ghost' data-rm='" + i + "'>Remove</button></td></tr>";
+    }).join("");
+    Array.prototype.forEach.call(document.querySelectorAll("[data-rm]"), function (b) {
+      b.onclick = function () { files.splice(+b.dataset.rm, 1); clearResults(); renderInputs(); };
+    });
+    renderInputStatus();
+    renderDtOptions();
+    renderOutSummary();
+  }
+
+  function good() { return files.filter(function (e) { return e.H; }); }
+
+  function renderInputStatus() {
+    var g = good(), box = $("instatus");
+    if (g.length < 2) { box.innerHTML = ""; return; }
+    var diffs = [];
+    function cmp(label, fn) {
+      var vals = g.map(fn), uniq = vals.filter(function (v, i) { return vals.indexOf(v) === i; });
+      if (uniq.length > 1) diffs.push(label + ": " + g.map(function (e, i) { return esc(e.file.name) + " = " + vals[i]; }).join("; "));
+    }
+    cmp("Trace count", function (e) { return e.H.ntr; });
+    cmp("First CDP", function (e) { return e.H.cdpFirst; });
+    cmp("Samples per trace", function (e) { return e.H.ns; });
+    cmp("Sample interval", function (e) { return fmtMs(e.H.dtUs); });
+    box.innerHTML = diffs.length
+      ? "<div class='status warn'>The input files differ:<ul><li>" + diffs.join("</li><li>") +
+        "</li></ul>Resampling gives them the same sample interval and time window, but trace count and CDP range stay as they are in each file.</div>"
+      : "<div class='status ok'>All input files have the same trace count, first CDP, samples per trace and sample interval.</div>";
+  }
+
+  function renderDtOptions() {
+    var g = good(), sel = $("dtout"), prev = sel.value;
+    if (!g.length) { sel.innerHTML = ""; return; }
+    var dts = g.map(function (e) { return e.H.dtUs; }), opts = [];
+    for (var L = 1; L <= 16; L++) {
+      var v = dts[0] / L;
+      if (v === Math.floor(v) && v >= 125 && dts.every(function (d) { return d % v === 0; })) opts.push(v);
+    }
+    sel.innerHTML = opts.map(function (v) { return "<option value='" + v + "'>" + fmtMs(v) + "</option>"; }).join("");
+    if (opts.indexOf(+prev) >= 0) sel.value = prev;
+    else if (opts.indexOf(1000) >= 0) sel.value = "1000";
+  }
+
+  function settings() {
+    return { dtOutUs: +$("dtout").value, tmin: Math.max(0, +$("tmin").value || 0), tmax: Math.max(0, +$("tmax").value || 0) };
+  }
+
+  function renderOutSummary() {
+    var g = good(), s = settings(), el = $("outsummary");
+    $("run").disabled = !g.length || !s.dtOutUs;
+    if (!g.length || !s.dtOutUs) { el.textContent = ""; return; }
+    var H = g[0].H, dtOut = s.dtOutUs / 1e6;
+    var nsFull = (H.ns - 1) * Math.round(H.dtUs / s.dtOutUs) + 1;
+    var i0 = Math.round(s.tmin / dtOut), i1 = s.tmax > 0 ? Math.min(nsFull - 1, Math.round(s.tmax / dtOut)) : nsFull - 1;
+    if (i1 <= i0) { el.textContent = "The end time must be later than the start time."; $("run").disabled = true; return; }
+    var n = i1 - i0 + 1;
+    el.textContent = "Each output trace: " + n + " samples at " + fmtMs(s.dtOutUs) + ", from " + (i0 * dtOut).toFixed(3) +
+      " to " + (i1 * dtOut).toFixed(3) + " s. Output size about " +
+      g.map(function (e) { return fmtBytes(e.H.hdrLen + e.H.ntr * (240 + 4 * n)); }).join(", ") + ".";
+  }
+  ["dtout", "tmin", "tmax"].forEach(function (id) { $(id).addEventListener("input", function () { clearResults(); renderOutSummary(); }); });
+
+  // ---------- running ----------
+  function clearResults() {
+    files.forEach(function (e) { e.result = null; });
+    $("qcstep").classList.add("hidden");
+    $("prog").innerHTML = ""; $("outstatus").innerHTML = "";
+  }
+
+  $("run").addEventListener("click", async function () {
+    var g = good(), s = settings();
+    clearResults();
+    $("run").disabled = true;
+    $("prog").innerHTML = g.map(function (e, i) {
+      return "<div class='progrow'><span title='" + esc(e.file.name) + "'>" + esc(e.file.name) +
+        "</span><div class='bar'><div id='bar" + i + "'></div></div><span id='pct" + i + "'>waiting</span></div>";
+    }).join("");
+    for (var i = 0; i < g.length; i++) {
+      try { g[i].result = await runOne(g[i], s, i); }
+      catch (err) { $("pct" + i).textContent = "failed"; $("outstatus").innerHTML += "<div class='status warn'>" + esc(g[i].file.name) + ": " + esc(err.message) + "</div>"; }
+    }
+    $("run").disabled = false;
+    showResults(s);
+  });
+
+  function runOne(entry, s, i) {
+    return new Promise(function (resolve, reject) {
+      var w = new Worker(workerURL), parts = [], t0 = performance.now();
+      w.onmessage = function (ev) {
+        var m = ev.data;
+        if (m.type === "chunk") parts.push(m.buf);
+        else if (m.type === "progress") {
+          $("bar" + i).style.width = (100 * m.done / m.total).toFixed(1) + "%";
+          $("pct" + i).textContent = Math.floor(100 * m.done / m.total) + "%";
+        } else if (m.type === "done") {
+          w.terminate();
+          m.blob = new Blob(parts, { type: "application/octet-stream" });
+          m.seconds = (performance.now() - t0) / 1000;
+          $("pct" + i).textContent = "done, " + m.seconds.toFixed(1) + " s";
+          resolve(m);
+        } else if (m.type === "error") { w.terminate(); reject(new Error(m.message)); }
+      };
+      w.onerror = function (e) { w.terminate(); reject(new Error(e.message || "Worker error")); };
+      w.postMessage({ file: entry.file, dtOutUs: s.dtOutUs, tmin: s.tmin, tmax: s.tmax });
+    });
+  }
+
+  function outName(entry, s) {
+    var base = entry.file.name.replace(/\.(sgy|segy)$/i, "");
+    var r = entry.result, t1 = r.t0 + (r.nOut - 1) * r.dtOutUs / 1e6;
+    return base + "_" + (s.dtOutUs / 1000) + "ms_" + +r.t0.toFixed(3) + "-" + +t1.toFixed(3) + "s.sgy";
+  }
+
+  // ---------- results and QC ----------
+  var qc = [];   // per file: {entry, clip, canvas, trcanvas}
+  function showResults(s) {
+    var done = good().filter(function (e) { return e.result; });
+    if (!done.length) return;
+    $("qcstep").classList.remove("hidden");
+    $("outtable").innerHTML = done.map(function (e) {
+      var r = e.result, name = outName(e, s);
+      if (e.url) URL.revokeObjectURL(e.url);
+      e.url = URL.createObjectURL(r.blob);
+      return "<tr><td class='name'>" + esc(name) + "</td><td>" + r.ntr.toLocaleString() + "</td><td>" + e.H.cdpFirst +
+        "</td><td>" + r.cdpLast + "</td><td>" + r.nOut + "</td><td>" + fmtMs(r.dtOutUs) + "</td><td>" + r.t0.toFixed(3) +
+        " to " + (r.t0 + (r.nOut - 1) * r.dtOutUs / 1e6).toFixed(3) + " s</td><td>" + r.rms.toPrecision(4) + "</td><td>" +
+        fmtBytes(r.blob.size) + "</td><td><a class='btn' style='padding:3px 12px' href='" + e.url + "' download='" + esc(name) + "'>Download</a></td></tr>";
+    }).join("");
+
+    if (done.length > 1) {
+      var r0 = done[0].result;
+      var same = done.every(function (e) { return e.result.ntr === r0.ntr && e.result.nOut === r0.nOut &&
+        e.result.dtOutUs === r0.dtOutUs && e.H.cdpFirst === done[0].H.cdpFirst && e.result.cdpLast === r0.cdpLast; });
+      $("outstatus").innerHTML += same
+        ? "<div class='status ok'>All output files have the same trace count, CDP range, samples per trace and sample interval.</div>"
+        : "<div class='status warn'>The output files differ in trace count or CDP range. The table in step 4 lists the values for each file.</div>";
+    }
+
+    var ntr = Math.min.apply(null, done.map(function (e) { return e.result.ntr; }));
+    var r = done[0].result, T = (r.nOut - 1) * r.dtOutUs / 1e6;
+    var win = Math.min(0.1, T);
+    $("trslider").max = ntr - 1; $("trslider").value = Math.floor(ntr / 2);
+    $("winslider").min = r.t0; $("winslider").max = (r.t0 + T - win).toFixed(3); $("winslider").step = 0.005;
+    $("winslider").value = Math.min(r.t0 + 1.0, r.t0 + T - win).toFixed(3);
+
+    $("qc").innerHTML = done.map(function (e, i) {
+      return "<div class='qcpanel'><h3>" + esc(e.file.name) + "</h3><canvas id='sec" + i + "'></canvas>" +
+        "<canvas id='trc" + i + "' style='margin-top:10px'></canvas></div>";
+    }).join("");
+    qc = done.map(function (e, i) {
+      var th = e.result.thumb, abs = new Float32Array(th.length);
+      for (var k = 0; k < th.length; k++) abs[k] = Math.abs(th[k]);
+      abs.sort();
+      var clip = abs[Math.floor(0.99 * (abs.length - 1))] || 1;
+      var ampMax = 1.5 * (abs[Math.floor(0.999 * (abs.length - 1))] || 1);
+      return { entry: e, clip: clip, ampMax: ampMax, sec: $("sec" + i), trc: $("trc" + i), img: sectionImage(e.result, clip) };
+    });
+    drawAll();
+  }
+
+  function sectionImage(r, clip) {
+    var c = document.createElement("canvas");
+    c.width = r.tCols; c.height = r.tRows;
+    var ctx = c.getContext("2d"), im = ctx.createImageData(r.tCols, r.tRows), d = im.data;
+    for (var k = 0; k < r.thumb.length; k++) {
+      var v = Math.max(-1, Math.min(1, r.thumb[k] / clip));
+      var g = Math.round(127.5 * (1 + v));
+      d[4 * k] = d[4 * k + 1] = d[4 * k + 2] = g; d[4 * k + 3] = 255;
+    }
+    ctx.putImageData(im, 0, 0);
+    return c;
+  }
+
+  function setupCanvas(cv, cssH) {
+    var dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 500;
+    cv.style.height = cssH + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(cssH * dpr);
+    var ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx: ctx, w: w, h: cssH };
+  }
+
+  var drawGen = 0;
+  function drawAll() {
+    var gen = ++drawGen;
+    var tr = +$("trslider").value, w0 = +$("winslider").value;
+    $("winout").textContent = w0.toFixed(3) + " s";
+    $("trout").textContent = (tr + 1).toLocaleString();
+    qc.forEach(function (q) { drawSection(q, tr, w0); drawTrace(q, tr, w0, gen); });
+  }
+
+  function niceTicks(a, b, n) {
+    var span = b - a, step = Math.pow(10, Math.floor(Math.log10(span / n)));
+    [1, 2, 5, 10].some(function (m) { if (span / (step * m) <= n) { step *= m; return true; } });
+    var out = [];
+    for (var v = Math.ceil(a / step) * step; v <= b + 1e-9; v += step) out.push(+v.toFixed(6));
+    return out;
+  }
+
+  function drawSection(q, tr, w0) {
+    var r = q.entry.result, S = setupCanvas(q.sec, 300), ctx = S.ctx;
+    var L = 46, R = 10, T = 8, B = 30, pw = S.w - L - R, ph = S.h - T - B;
+    ctx.clearRect(0, 0, S.w, S.h);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(q.img, L, T, pw, ph);
+    ctx.strokeStyle = "#C9CDD2"; ctx.strokeRect(L + 0.5, T + 0.5, pw, ph);
+    var t0 = r.t0, T1 = r.t0 + (r.nOut - 1) * r.dtOutUs / 1e6;
+    ctx.fillStyle = "#5C6670"; ctx.font = "12px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    niceTicks(t0, T1, 6).forEach(function (t) {
+      var y = T + ph * (t - t0) / (T1 - t0);
+      ctx.fillText(t.toFixed(1), L - 6, y); ctx.fillRect(L - 3, y, 3, 1);
+    });
+    ctx.save(); ctx.translate(12, T + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center";
+    ctx.fillText("Two-way time (s)", 0, 0); ctx.restore();
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    niceTicks(1, r.ntr, 6).forEach(function (n) {
+      var x = L + pw * (n - 1) / Math.max(1, r.ntr - 1);
+      ctx.fillText(n.toLocaleString(), x, T + ph + 5); ctx.fillRect(x, T + ph, 1, 3);
+    });
+    ctx.fillText("Trace", L + pw / 2, T + ph + 17);
+    // guide: selected trace and trace-plot window
+    var x = L + pw * tr / Math.max(1, r.ntr - 1);
+    var ya = T + ph * (w0 - t0) / (T1 - t0), yb = T + ph * (w0 + 0.1 - t0) / (T1 - t0);
+    ctx.strokeStyle = "#841617"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, T + ph); ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x - 6, ya); ctx.lineTo(x + 6, ya); ctx.moveTo(x - 6, yb); ctx.lineTo(x + 6, yb); ctx.stroke();
+    ctx.lineWidth = 1;
+    q.sec.onclick = function (ev) {
+      var rect = q.sec.getBoundingClientRect(), px = ev.clientX - rect.left;
+      var k = Math.round((px - L) / pw * (r.ntr - 1));
+      if (k >= 0 && k < r.ntr) { $("trslider").value = k; drawAll(); }
+    };
+  }
+
+  async function drawTrace(q, tr, w0, gen) {
+    var e = q.entry, H = e.H, r = e.result;
+    var inBuf = await e.file.slice(H.hdrLen + tr * H.trLen, H.hdrLen + (tr + 1) * H.trLen).arrayBuffer();
+    var outBuf = await r.blob.slice(r.hdrLen + tr * r.outTrLen, r.hdrLen + (tr + 1) * r.outTrLen).arrayBuffer();
+    if (gen !== drawGen) return;   // a newer redraw is on the way
+    if (q === qc[0]) $("trout").textContent = (tr + 1).toLocaleString() + " (CDP " + new DataView(inBuf).getInt32(20, H.le) + ")";
+    var a = new Float64Array(H.ns); decodeSamples(new DataView(inBuf), 240, H.ns, H.fmt, H.le, a);
+    var b = new Float64Array(r.nOut); decodeSamples(new DataView(outBuf), 240, r.nOut, 5, r.le, b);
+    var S = setupCanvas(q.trc, 220), ctx = S.ctx;
+    var L = 46, R = 10, T = 8, B = 30, pw = S.w - L - R, ph = S.h - T - B;
+    var w1 = w0 + 0.1, A = q.ampMax;
+    function X(t) { return L + pw * (t - w0) / (w1 - w0); }
+    function Y(v) { return T + ph * (0.5 - 0.5 * Math.max(-1, Math.min(1, v / A))); }
+    ctx.clearRect(0, 0, S.w, S.h);
+    ctx.strokeStyle = "#C9CDD2"; ctx.strokeRect(L + 0.5, T + 0.5, pw, ph);
+    ctx.beginPath(); ctx.moveTo(L, Y(0)); ctx.lineTo(L + pw, Y(0)); ctx.stroke();
+    ctx.fillStyle = "#5C6670"; ctx.font = "12px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    niceTicks(w0, w1, 5).forEach(function (t) { var x = X(t); ctx.fillText(t.toFixed(2), x, T + ph + 5); ctx.fillRect(x, T + ph, 1, 3); });
+    ctx.fillText("Two-way time (s)", L + pw / 2, T + ph + 17);
+    ctx.save(); ctx.translate(12, T + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = "middle";
+    ctx.fillText("Amplitude", 0, 0); ctx.restore();
+    // resampled trace
+    ctx.strokeStyle = "#16191C"; ctx.lineWidth = 1.3; ctx.beginPath();
+    var dO = r.dtOutUs / 1e6, first = true;
+    for (var s = Math.max(0, Math.floor((w0 - r.t0) / dO)); s < r.nOut; s++) {
+      var t = r.t0 + s * dO; if (t > w1) break;
+      if (first) { ctx.moveTo(X(t), Y(b[s])); first = false; } else ctx.lineTo(X(t), Y(b[s]));
+    }
+    ctx.stroke();
+    // input samples
+    ctx.fillStyle = "#841617";
+    for (var i = Math.max(0, Math.ceil(w0 / H.dt)); i < H.ns; i++) {
+      var ti = i * H.dt; if (ti > w1) break;
+      ctx.beginPath(); ctx.arc(X(ti), Y(a[i]), 2.6, 0, 2 * Math.PI); ctx.fill();
+    }
+    ctx.lineWidth = 1;
+  }
+
+  $("trslider").addEventListener("input", drawAll);
+  $("winslider").addEventListener("input", drawAll);
+  window.addEventListener("resize", function () { if (qc.length) drawAll(); });
+})();
+</script>
+<script data-goatcounter="https://hbedle.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
