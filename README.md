@@ -17,6 +17,15 @@ A 2D line of 19,393 traces with 5,001 samples (about 390 MB) resamples from 2 ms
 
 Each trace is Fourier transformed, the spectrum is extended with zeros above the Nyquist frequency of the input sampling, and the inverse transform gives the trace at the finer sample interval (band-limited, or sinc, interpolation). The input samples are reproduced in the output, and no frequency content above the input Nyquist frequency is created. Only the part of each trace needed for the chosen window, plus a 0.5 s cosine-tapered margin, is transformed.
 
+## Time and true start time
+
+Start and end times are true times. The first input sample is taken to be at the delay recording time of the first trace header (bytes 109 and 110), so a line whose traces start at 1.0 s is cropped at 1.0 s, not at 0.
+
+"Start of output traces" has two settings:
+
+- **Delay in trace headers** (default): the delay recording time of every trace is increased by the amount cropped off the top, so the first output sample is at the chosen start time.
+- **Zeros from the original start**: for software that ignores the delay recording time and plots the first sample at 0 s. Zeros are written from the original start of the traces down to the chosen start time, so the data sit at their true times with no header setting needed. Files are larger by the zero samples.
+
 ## CDP crop
 
 Every trace header is read once and the traces whose CDP number lies inside the range (both ends included) are resampled and written. Selection is by CDP number, so it does not assume the numbers increase along the file. An output interval equal to the input interval gives a crop with no interpolation. CDP numbers, trace sequence numbers and coordinates are copied unchanged, so the cropped line keeps its original numbering. The output file name gets a `_cdpFIRST-LAST` suffix when traces were removed, and the section display is labeled in CDP.
@@ -25,7 +34,7 @@ Every trace header is read once and the traces whose CDP number lies inside the 
 
 - 32-bit IEEE float samples (format code 5), in the byte order of the input file.
 - Binary header: sample interval, samples per trace and format code updated.
-- Trace headers: copied from the input, with samples per trace and sample interval updated. When the start time is not zero, the delay recording time is increased by the start time. CDP numbers, coordinates and all other values are unchanged.
+- Trace headers: copied from the input, with samples per trace and sample interval updated. When the traces are cropped at the top, the delay recording time is increased by the amount cropped (default setting). CDP numbers, coordinates and all other values are unchanged.
 - Textual header: copied unchanged, so any sample interval or format it states refers to the original file.
 
 Supported input: fixed-length SEG-Y (revision 0, 1 or 2) with IBM float, IEEE float, or 8-, 16- or 32-bit integer samples, big- or little-endian, with or without extended textual headers.
