@@ -84,7 +84,7 @@ footer a { color: var(--slate); }
 <body>
 <header><div class="wrap">
   <h1>SEG-Y Resample</h1>
-  <p class="sub">Interpolates post-stack SEG-Y files to a finer sample interval and crops them in time.
+  <p class="sub">Interpolates post-stack SEG-Y files to a finer sample interval and crops them in time and by CDP range.
   Files are read and processed in this browser and are not uploaded anywhere.</p>
 </div></header>
 
@@ -101,7 +101,7 @@ footer a { color: var(--slate); }
     </label>
     <div class="tablewrap hidden" id="intablewrap">
       <table>
-        <thead><tr><th>File</th><th>Dataset (textual header)</th><th>Traces</th><th>First CDP</th>
+        <thead><tr><th>File</th><th>Dataset (textual header)</th><th>Traces</th><th>First CDP</th><th>Last CDP</th>
           <th>Samples</th><th>Interval</th><th>Length</th><th>Format</th><th>Size</th><th></th></tr></thead>
         <tbody id="intable"></tbody>
       </table>
@@ -113,7 +113,7 @@ footer a { color: var(--slate); }
 <section class="step">
   <div class="num">2</div>
   <div>
-    <h2>Choose the output sampling and time window</h2>
+    <h2>Choose the output sampling, time window and CDP range</h2>
     <div class="settings">
       <label class="f">Output sample interval
         <select id="dtout"></select></label>
@@ -121,7 +121,14 @@ footer a { color: var(--slate); }
         <input type="number" id="tmin" value="0" min="0" step="0.1"></label>
       <label class="f">End time (s)
         <input type="number" id="tmax" value="2" min="0" step="0.1"></label>
+      <label class="f">First CDP
+        <input type="number" id="cdpmin" step="1" placeholder="all"></label>
+      <label class="f">Last CDP
+        <input type="number" id="cdpmax" step="1" placeholder="all"></label>
+      <label class="f">CDP header byte
+        <input type="number" id="cdpbyte" value="21" min="1" max="237" step="1"></label>
     </div>
+    <p class="note" id="cdpnote" style="margin-top:12px"></p>
     <p class="note" id="outsummary" style="margin-top:12px"></p>
   </div>
 </section>
@@ -168,11 +175,16 @@ footer a { color: var(--slate); }
     band-limited (sinc) interpolation. The input samples reappear unchanged in the output, and no frequencies
     above the input Nyquist frequency are created. Only the part of each trace needed for the chosen window,
     plus a 0.5 s tapered margin, is transformed.</p>
+    <p>When a first and last CDP are given, every trace header is read once to find the traces whose CDP number
+    lies inside the range (both ends included), and only those traces are resampled and written. The CDP number is
+    read from the chosen header bytes, which are 21 to 24 in the SEG-Y standard. Selecting by CDP number does not
+    assume that the numbers increase along the file. Setting the output interval equal to the input interval gives
+    a crop without interpolation.</p>
     <p>The output is written as 32-bit IEEE float (format code 5) with the byte order of the input. The binary
     header sample interval, samples per trace and format code are updated. Each trace header is copied with its
     samples per trace and sample interval updated, and with the delay recording time increased by the start time
-    when the start time is not zero. All other trace header values, including CDP numbers and coordinates, are
-    unchanged. The 3200-byte textual header is copied as it was, so any sample interval or format it states
+    when the start time is not zero. All other trace header values, including CDP numbers, coordinates and trace
+    sequence numbers, are unchanged, so the cropped line keeps its original CDP numbering. The 3200-byte textual header is copied as it was, so any sample interval or format it states
     refers to the original file.</p>
   </div>
 </section>
@@ -362,7 +374,7 @@ function resamplePair(plan, a, b, outA, outB) {
 // message in : { file, dtOutUs, tmin, tmax }
 // messages out: {type:'progress', done, total} | {type:'chunk', buf} | {type:'done', ...} | {type:'error', message}
 
-async function resampleFile(file, dtOutUs, tmin, tmax, post) {
+async function resampleFile(file, dtOutUs, tmin, tmax, cdpByte, cdpMin, cdpMax, post) {
   var headBuf = await file.slice(0, Math.min(file.size, 3600 + 3200 * 100 + 240)).arrayBuffer();
   var H = parseSegyHead(headBuf, file.size);
   var le = H.le;
@@ -386,35 +398,58 @@ async function resampleFile(file, dtOutUs, tmin, tmax, post) {
   hv.setUint16(3224, 5, le);
   post({ type: "chunk", buf: hdr.buffer }, [hdr.buffer]);
 
+  // trace selection by CDP number (CDP header word read at byte cdpByte, 1-based)
+  var cOff = cdpByte - 1, sel, nSel, c0, k, n;
+  if (cdpMin === null && cdpMax === null) {
+    nSel = H.ntr; sel = new Uint32Array(nSel);
+    for (k = 0; k < nSel; k++) sel[k] = k;
+  } else {
+    post({ type: "scan" });
+    var lo = cdpMin === null ? -Infinity : cdpMin, hi = cdpMax === null ? Infinity : cdpMax;
+    var keep = [], rd = Math.max(1, Math.floor(8e6 / H.trLen));
+    for (c0 = 0; c0 < H.ntr; c0 += rd) {
+      n = Math.min(rd, H.ntr - c0);
+      var hb = await file.slice(H.hdrLen + c0 * H.trLen, H.hdrLen + (c0 + n) * H.trLen).arrayBuffer();
+      var hd = new DataView(hb);
+      for (k = 0; k < n; k++) {
+        var cv = hd.getInt32(k * H.trLen + cOff, le);
+        if (cv >= lo && cv <= hi) keep.push(c0 + k);
+      }
+    }
+    if (!keep.length) throw new Error("No traces have a CDP number in the chosen range (CDP read from header bytes " + cdpByte + " to " + (cdpByte + 3) + ").");
+    sel = Uint32Array.from(keep); nSel = sel.length;
+  }
+
   var outTrLen = 240 + 4 * nOut;
   var perChunk = Math.max(2, Math.floor(8e6 / H.trLen)) & ~1;   // even, ~8 MB per read
   var a = new Float64Array(H.ns), b = new Float64Array(H.ns);
   var oa = new Float64Array(nOut), ob = new Float64Array(nOut);
 
   // QC thumbnail: about 900 traces by 600 samples
-  var tStride = Math.max(1, Math.ceil(H.ntr / 900));
+  var tStride = Math.max(1, Math.ceil(nSel / 900));
   var sStride = Math.max(1, Math.ceil(nOut / 600));
-  var tCols = Math.ceil(H.ntr / tStride), tRows = Math.ceil(nOut / sStride);
+  var tCols = Math.ceil(nSel / tStride), tRows = Math.ceil(nOut / sStride);
   var thumb = new Float32Array(tCols * tRows);
 
   var sum2 = 0, cnt = 0, amin = Infinity, amax = -Infinity;
-  var cdpLast = null, delrtAdd = Math.round(i0 * dtOut * 1000);
+  var cdpFirstOut = null, cdpLast = null, delrtAdd = Math.round(i0 * dtOut * 1000);
 
-  for (var c0 = 0; c0 < H.ntr; c0 += perChunk) {
-    var n = Math.min(perChunk, H.ntr - c0);
-    var inBuf = await file.slice(H.hdrLen + c0 * H.trLen, H.hdrLen + (c0 + n) * H.trLen).arrayBuffer();
+  for (var s0 = 0; s0 < nSel; s0 += perChunk) {
+    n = Math.min(perChunk, nSel - s0);
+    var firstIn = sel[s0], lastIn = sel[s0 + n - 1];
+    var inBuf = await file.slice(H.hdrLen + firstIn * H.trLen, H.hdrLen + (lastIn + 1) * H.trLen).arrayBuffer();
     var dv = new DataView(inBuf);
     var outBuf = new ArrayBuffer(n * outTrLen);
     var odv = new DataView(outBuf), ob8 = new Uint8Array(outBuf), ib8 = new Uint8Array(inBuf);
 
-    for (var k = 0; k < n; k += 2) {
+    for (k = 0; k < n; k += 2) {
       var two = k + 1 < n;
-      decodeSamples(dv, k * H.trLen + 240, H.ns, H.fmt, le, a);
-      if (two) decodeSamples(dv, (k + 1) * H.trLen + 240, H.ns, H.fmt, le, b);
+      decodeSamples(dv, (sel[s0 + k] - firstIn) * H.trLen + 240, H.ns, H.fmt, le, a);
+      if (two) decodeSamples(dv, (sel[s0 + k + 1] - firstIn) * H.trLen + 240, H.ns, H.fmt, le, b);
       resamplePair(plan, a, two ? b : null, oa, two ? ob : null);
       for (var q = 0; q < (two ? 2 : 1); q++) {
-        var src = q ? ob : oa, kk = k + q, trace = c0 + kk;
-        var ioff = kk * H.trLen, ooff = kk * outTrLen;
+        var src = q ? ob : oa, kk = k + q, trace = s0 + kk;
+        var ioff = (sel[trace] - firstIn) * H.trLen, ooff = kk * outTrLen;
         ob8.set(ib8.subarray(ioff, ioff + 240), ooff);
         odv.setUint16(ooff + 114, nOut, le);
         odv.setUint16(ooff + 116, dtOutUs, le);
@@ -431,24 +466,25 @@ async function resampleFile(file, dtOutUs, tmin, tmax, post) {
           var col = trace / tStride;
           for (var r = 0; r < tRows; r++) thumb[r * tCols + col] = src[r * sStride];
         }
-        if (trace === H.ntr - 1) cdpLast = odv.getInt32(ooff + 20, le);
+        if (trace === 0) cdpFirstOut = odv.getInt32(ooff + cOff, le);
+        if (trace === nSel - 1) cdpLast = odv.getInt32(ooff + cOff, le);
       }
     }
     post({ type: "chunk", buf: outBuf }, [outBuf]);
-    post({ type: "progress", done: c0 + n, total: H.ntr });
+    post({ type: "progress", done: s0 + n, total: nSel });
   }
 
-  post({ type: "done", ntr: H.ntr, nOut: nOut, dtOutUs: dtOutUs, t0: i0 * dtOut,
+  post({ type: "done", ntr: nSel, ntrIn: H.ntr, idx: sel, cdpFirst: cdpFirstOut, cdpByte: cdpByte, nOut: nOut, dtOutUs: dtOutUs, t0: i0 * dtOut,
          outTrLen: outTrLen, hdrLen: H.hdrLen, le: le,
          rms: Math.sqrt(sum2 / cnt), min: amin, max: amax, cdpLast: cdpLast,
          thumb: thumb, tCols: tCols, tRows: tRows, tStride: tStride, sStride: sStride },
-       [thumb.buffer]);
+       [thumb.buffer, sel.buffer]);
 }
 
 if (typeof self !== "undefined" && typeof self.postMessage === "function" && typeof window === "undefined") {
   self.onmessage = function (e) {
     var d = e.data;
-    resampleFile(d.file, d.dtOutUs, d.tmin, d.tmax, function (m, t) { self.postMessage(m, t || []); })
+    resampleFile(d.file, d.dtOutUs, d.tmin, d.tmax, d.cdpByte, d.cdpMin, d.cdpMax, function (m, t) { self.postMessage(m, t || []); })
       .catch(function (err) { self.postMessage({ type: "error", message: err.message }); });
   };
 }
@@ -486,21 +522,36 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
         var head = await f.slice(0, Math.min(f.size, 3600 + 3200 * 100 + 240)).arrayBuffer();
         if (f.size < 3600 + 240) throw new Error("File is smaller than a SEG-Y header.");
         entry.H = parseSegyHead(head, f.size);
-      } catch (err) { entry.err = err.message; }
+        await readCdpRange(entry);
+      } catch (err) { entry.err = err.message; entry.H = null; }
       files.push(entry);
     }
     clearResults();
     renderInputs();
   }
 
+  function cdpByteSetting() {
+    var v = Math.round(+$("cdpbyte").value);
+    return v >= 1 && v <= 237 ? v : 21;
+  }
+
+  // first and last CDP of the file, from the CDP word of the first and last trace header
+  async function readCdpRange(entry) {
+    var H = entry.H, off = cdpByteSetting() - 1;
+    var a = await entry.file.slice(H.hdrLen, H.hdrLen + 240).arrayBuffer();
+    var b = await entry.file.slice(H.hdrLen + (H.ntr - 1) * H.trLen, H.hdrLen + (H.ntr - 1) * H.trLen + 240).arrayBuffer();
+    H.cdpFirst = new DataView(a).getInt32(off, H.le);
+    H.cdpLast = new DataView(b).getInt32(off, H.le);
+  }
+
   function renderInputs() {
     $("intablewrap").classList.toggle("hidden", files.length === 0);
     $("intable").innerHTML = files.map(function (e, i) {
       var H = e.H;
-      if (!H) return "<tr><td class='name'>" + esc(e.file.name) + "</td><td colspan='8' style='color:var(--red)'>" +
+      if (!H) return "<tr><td class='name'>" + esc(e.file.name) + "</td><td colspan='9' style='color:var(--red)'>" +
         esc(e.err) + "</td><td><button class='ghost' data-rm='" + i + "'>Remove</button></td></tr>";
       return "<tr><td class='name'>" + esc(e.file.name) + "</td><td class='ds'>" + esc(datasetLine(H)) + "</td><td>" +
-        H.ntr.toLocaleString() + "</td><td>" + H.cdpFirst + "</td><td>" + H.ns + "</td><td>" + fmtMs(H.dtUs) +
+        H.ntr.toLocaleString() + "</td><td>" + H.cdpFirst + "</td><td>" + H.cdpLast + "</td><td>" + H.ns + "</td><td>" + fmtMs(H.dtUs) +
         "</td><td>" + ((H.ns - 1) * H.dt).toFixed(3) + " s</td><td>" + FORMAT_NAMES[H.fmt] + (H.le ? ", little-endian" : "") +
         "</td><td>" + fmtBytes(e.file.size) + "</td><td><button class='ghost' data-rm='" + i + "'>Remove</button></td></tr>";
     }).join("");
@@ -510,6 +561,7 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
     renderInputStatus();
     renderDtOptions();
     renderOutSummary();
+    renderCdpNote();
   }
 
   function good() { return files.filter(function (e) { return e.H; }); }
@@ -524,12 +576,13 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
     }
     cmp("Trace count", function (e) { return e.H.ntr; });
     cmp("First CDP", function (e) { return e.H.cdpFirst; });
+    cmp("Last CDP", function (e) { return e.H.cdpLast; });
     cmp("Samples per trace", function (e) { return e.H.ns; });
     cmp("Sample interval", function (e) { return fmtMs(e.H.dtUs); });
     box.innerHTML = diffs.length
       ? "<div class='status warn'>The input files differ:<ul><li>" + diffs.join("</li><li>") +
         "</li></ul>Resampling gives them the same sample interval and time window, but trace count and CDP range stay as they are in each file.</div>"
-      : "<div class='status ok'>All input files have the same trace count, first CDP, samples per trace and sample interval.</div>";
+      : "<div class='status ok'>All input files have the same trace count, CDP range, samples per trace and sample interval.</div>";
   }
 
   function renderDtOptions() {
@@ -546,7 +599,19 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
   }
 
   function settings() {
-    return { dtOutUs: +$("dtout").value, tmin: Math.max(0, +$("tmin").value || 0), tmax: Math.max(0, +$("tmax").value || 0) };
+    function opt(id) { var v = $(id).value.trim(); return v === "" || isNaN(+v) ? null : Math.round(+v); }
+    return { dtOutUs: +$("dtout").value, tmin: Math.max(0, +$("tmin").value || 0), tmax: Math.max(0, +$("tmax").value || 0),
+             cdpByte: cdpByteSetting(), cdpMin: opt("cdpmin"), cdpMax: opt("cdpmax") };
+  }
+
+  // number of traces inside the CDP range, when the CDP numbers run in steps of one along the file;
+  // null when that cannot be known before reading every trace header
+  function estTraces(H, s) {
+    if (s.cdpMin === null && s.cdpMax === null) return H.ntr;
+    if (Math.abs(H.cdpLast - H.cdpFirst) !== H.ntr - 1) return null;
+    var a = Math.min(H.cdpFirst, H.cdpLast), b = Math.max(H.cdpFirst, H.cdpLast);
+    var lo = Math.max(a, s.cdpMin === null ? a : s.cdpMin), hi = Math.min(b, s.cdpMax === null ? b : s.cdpMax);
+    return Math.max(0, hi - lo + 1);
   }
 
   function renderOutSummary() {
@@ -558,11 +623,30 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
     var i0 = Math.round(s.tmin / dtOut), i1 = s.tmax > 0 ? Math.min(nsFull - 1, Math.round(s.tmax / dtOut)) : nsFull - 1;
     if (i1 <= i0) { el.textContent = "The end time must be later than the start time."; $("run").disabled = true; return; }
     var n = i1 - i0 + 1;
-    el.textContent = "Each output trace: " + n + " samples at " + fmtMs(s.dtOutUs) + ", from " + (i0 * dtOut).toFixed(3) +
+    var ests = g.map(function (e) { return estTraces(e.H, s); });
+    if (ests.some(function (v) { return v === 0; })) {
+      el.textContent = "The CDP range does not overlap the CDP numbers of at least one file."; $("run").disabled = true; return;
+    }
+    var cdpPart = ests.every(function (v) { return v !== null; })
+      ? g.map(function (e, i) { return ests[i].toLocaleString() + " of " + e.H.ntr.toLocaleString(); }).join(", ") + " traces kept. "
+      : "The number of traces kept is counted when the files are processed. ";
+    el.textContent = cdpPart + "Each output trace: " + n + " samples at " + fmtMs(s.dtOutUs) + ", from " + (i0 * dtOut).toFixed(3) +
       " to " + (i1 * dtOut).toFixed(3) + " s. Output size about " +
-      g.map(function (e) { return fmtBytes(e.H.hdrLen + e.H.ntr * (240 + 4 * n)); }).join(", ") + ".";
+      g.map(function (e, i) { return fmtBytes(e.H.hdrLen + (ests[i] === null ? e.H.ntr : ests[i]) * (240 + 4 * n)); }).join(", ") +
+      (ests.some(function (v) { return v === null; }) ? " or less" : "") + ".";
   }
-  ["dtout", "tmin", "tmax"].forEach(function (id) { $(id).addEventListener("input", function () { clearResults(); renderOutSummary(); }); });
+  function renderCdpNote() {
+    var g = good(), el = $("cdpnote");
+    if (!g.length) { el.textContent = ""; return; }
+    el.textContent = "CDP numbers are read from header bytes " + cdpByteSetting() + " to " + (cdpByteSetting() + 3) + " (21 to 24 is the SEG-Y standard location). " +
+      g.map(function (e) { return e.file.name + ": CDP " + e.H.cdpFirst + " to " + e.H.cdpLast; }).join("; ") +
+      ". Leave First CDP and Last CDP empty to keep every trace; one empty keeps that end of the line.";
+  }
+  ["dtout", "tmin", "tmax", "cdpmin", "cdpmax"].forEach(function (id) { $(id).addEventListener("input", function () { clearResults(); renderOutSummary(); }); });
+  $("cdpbyte").addEventListener("change", async function () {
+    for (var i = 0; i < files.length; i++) if (files[i].H) { try { await readCdpRange(files[i]); } catch (err) { files[i].err = err.message; files[i].H = null; } }
+    clearResults(); renderInputs();
+  });
 
   // ---------- running ----------
   function clearResults() {
@@ -593,6 +677,7 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
       w.onmessage = function (ev) {
         var m = ev.data;
         if (m.type === "chunk") parts.push(m.buf);
+        else if (m.type === "scan") $("pct" + i).textContent = "reading CDPs";
         else if (m.type === "progress") {
           $("bar" + i).style.width = (100 * m.done / m.total).toFixed(1) + "%";
           $("pct" + i).textContent = Math.floor(100 * m.done / m.total) + "%";
@@ -605,14 +690,17 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
         } else if (m.type === "error") { w.terminate(); reject(new Error(m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || "Worker error")); };
-      w.postMessage({ file: entry.file, dtOutUs: s.dtOutUs, tmin: s.tmin, tmax: s.tmax });
+      w.postMessage({ file: entry.file, dtOutUs: s.dtOutUs, tmin: s.tmin, tmax: s.tmax,
+                      cdpByte: s.cdpByte, cdpMin: s.cdpMin, cdpMax: s.cdpMax });
     });
   }
 
   function outName(entry, s) {
     var base = entry.file.name.replace(/\.(sgy|segy)$/i, "");
     var r = entry.result, t1 = r.t0 + (r.nOut - 1) * r.dtOutUs / 1e6;
-    return base + "_" + (s.dtOutUs / 1000) + "ms_" + +r.t0.toFixed(3) + "-" + +t1.toFixed(3) + "s.sgy";
+    var cropped = r.ntr !== r.ntrIn;
+    return base + "_" + (s.dtOutUs / 1000) + "ms_" + +r.t0.toFixed(3) + "-" + +t1.toFixed(3) + "s" +
+      (cropped ? "_cdp" + r.cdpFirst + "-" + r.cdpLast : "") + ".sgy";
   }
 
   // ---------- results and QC ----------
@@ -625,7 +713,7 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
       var r = e.result, name = outName(e, s);
       if (e.url) URL.revokeObjectURL(e.url);
       e.url = URL.createObjectURL(r.blob);
-      return "<tr><td class='name'>" + esc(name) + "</td><td>" + r.ntr.toLocaleString() + "</td><td>" + e.H.cdpFirst +
+      return "<tr><td class='name'>" + esc(name) + "</td><td>" + r.ntr.toLocaleString() + (r.ntr !== r.ntrIn ? " of " + r.ntrIn.toLocaleString() : "") + "</td><td>" + r.cdpFirst +
         "</td><td>" + r.cdpLast + "</td><td>" + r.nOut + "</td><td>" + fmtMs(r.dtOutUs) + "</td><td>" + r.t0.toFixed(3) +
         " to " + (r.t0 + (r.nOut - 1) * r.dtOutUs / 1e6).toFixed(3) + " s</td><td>" + r.rms.toPrecision(4) + "</td><td>" +
         fmtBytes(r.blob.size) + "</td><td><a class='btn' style='padding:3px 12px' href='" + e.url + "' download='" + esc(name) + "'>Download</a></td></tr>";
@@ -634,7 +722,7 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
     if (done.length > 1) {
       var r0 = done[0].result;
       var same = done.every(function (e) { return e.result.ntr === r0.ntr && e.result.nOut === r0.nOut &&
-        e.result.dtOutUs === r0.dtOutUs && e.H.cdpFirst === done[0].H.cdpFirst && e.result.cdpLast === r0.cdpLast; });
+        e.result.dtOutUs === r0.dtOutUs && e.result.cdpFirst === r0.cdpFirst && e.result.cdpLast === r0.cdpLast; });
       $("outstatus").innerHTML += same
         ? "<div class='status ok'>All output files have the same trace count, CDP range, samples per trace and sample interval.</div>"
         : "<div class='status warn'>The output files differ in trace count or CDP range. The table in step 4 lists the values for each file.</div>";
@@ -718,11 +806,12 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
     ctx.save(); ctx.translate(12, T + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center";
     ctx.fillText("Two-way time (s)", 0, 0); ctx.restore();
     ctx.textAlign = "center"; ctx.textBaseline = "top";
-    niceTicks(1, r.ntr, 6).forEach(function (n) {
-      var x = L + pw * (n - 1) / Math.max(1, r.ntr - 1);
+    var cA = r.cdpFirst, cB = r.cdpLast, cSpan = (cB - cA) || 1;
+    niceTicks(Math.min(cA, cB), Math.max(cA, cB), 6).forEach(function (n) {
+      var x = L + pw * (n - cA) / cSpan;
       ctx.fillText(n.toLocaleString(), x, T + ph + 5); ctx.fillRect(x, T + ph, 1, 3);
     });
-    ctx.fillText("Trace", L + pw / 2, T + ph + 17);
+    ctx.fillText("CDP", L + pw / 2, T + ph + 17);
     // guide: selected trace and trace-plot window
     var x = L + pw * tr / Math.max(1, r.ntr - 1);
     var ya = T + ph * (w0 - t0) / (T1 - t0), yb = T + ph * (w0 + 0.1 - t0) / (T1 - t0);
@@ -740,10 +829,11 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
 
   async function drawTrace(q, tr, w0, gen) {
     var e = q.entry, H = e.H, r = e.result;
-    var inBuf = await e.file.slice(H.hdrLen + tr * H.trLen, H.hdrLen + (tr + 1) * H.trLen).arrayBuffer();
+    var inTr = r.idx[tr];
+    var inBuf = await e.file.slice(H.hdrLen + inTr * H.trLen, H.hdrLen + (inTr + 1) * H.trLen).arrayBuffer();
     var outBuf = await r.blob.slice(r.hdrLen + tr * r.outTrLen, r.hdrLen + (tr + 1) * r.outTrLen).arrayBuffer();
     if (gen !== drawGen) return;   // a newer redraw is on the way
-    if (q === qc[0]) $("trout").textContent = (tr + 1).toLocaleString() + " (CDP " + new DataView(inBuf).getInt32(20, H.le) + ")";
+    if (q === qc[0]) $("trout").textContent = (tr + 1).toLocaleString() + " (CDP " + new DataView(inBuf).getInt32(r.cdpByte - 1, H.le) + ")";
     var a = new Float64Array(H.ns); decodeSamples(new DataView(inBuf), 240, H.ns, H.fmt, H.le, a);
     var b = new Float64Array(r.nOut); decodeSamples(new DataView(outBuf), 240, r.nOut, 5, r.le, b);
     var S = setupCanvas(q.trc, 220), ctx = S.ctx;
